@@ -1,6 +1,7 @@
 import html
 import os
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 
 from fastmcp import FastMCP
 from piazza_api import Piazza
@@ -11,7 +12,11 @@ from piazza_api.network import (
     UnreadFilter,
 )
 
-from piazza_mcp.formatting import format_full_post, make_snippet
+from piazza_mcp.formatting import (
+    format_full_post,
+    html_to_markdown,
+    make_snippet,
+)
 
 mcp = FastMCP("piazza")
 
@@ -42,6 +47,29 @@ def _get_network() -> Network:
     if _network is None:
         raise RuntimeError("No class selected. Call set_class(network_id) first.")
     return _network
+
+
+def _get_all_networks() -> list[tuple[str, Network]]:
+    """Return Network objects for all active classes.
+
+    Returns a list of (class_display_name, Network) tuples.
+    """
+    p = _login()
+    status = p.get_user_status()
+    active = [c for c in status.get("networks", []) if c.get("status") == "active"]
+    results = []
+    for c in active:
+        name = c.get("name", "Unknown")
+        term = c.get("term", "")
+        num = c.get("course_number", "")
+        display = name
+        if num:
+            display += f" ({num})"
+        if term:
+            display += f" — {term}"
+        nid = c.get("id", "")
+        results.append((display, p.network(nid)))
+    return results
 
 
 @mcp.tool()
@@ -440,6 +468,359 @@ def get_pinned_posts(
     for p in pinned:
         lines.append(_format_feed_post(p))
     return "\n\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Deadline extraction
+# ---------------------------------------------------------------------------
+
+# Patterns that signal deadline-relevant content
+_DEADLINE_KEYWORDS = re.compile(
+    r"\b(due|deadline|extension|submit|submission|marmoset|markus|gradescope"
+    r"|late\s*day|penalty|cutoff|closes?|turned?\s*in)\b",
+    re.IGNORECASE,
+)
+
+# Common date patterns: "March 15", "Mar 15", "3/15", "2025-03-15", etc.
+_DATE_PATTERN = re.compile(
+    r"\b(?:"
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?"
+    r"|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?"
+    r"|Dec(?:ember)?)\s+\d{1,2}(?:,?\s*\d{4})?"
+    r"|\d{1,2}/\d{1,2}(?:/\d{2,4})?"
+    r"|\d{4}-\d{2}-\d{2}"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_deadline_lines(text: str) -> list[str]:
+    """Pull sentences/lines that mention deadlines or dates."""
+    hits: list[str] = []
+    for line in re.split(r"[\n.;]", text):
+        line = line.strip()
+        if not line:
+            continue
+        if _DEADLINE_KEYWORDS.search(line) or _DATE_PATTERN.search(line):
+            hits.append(line)
+    return hits
+
+
+@mcp.tool()
+def get_deadlines(
+    folder: str | None = None,
+    limit: int = 30,
+) -> str:
+    """Scan recent posts for deadlines, due dates, extensions, and submission
+    info. Parses post content for date patterns and keywords like 'due',
+    'extension', 'marmoset', 'gradescope', etc. Use this instead of reading
+    50 posts when you just need to know when something is due."""
+    network = _get_network()
+    feed = _get_feed(folder, limit=limit)
+
+    results: list[str] = []
+    for post_summary in feed:
+        nr = post_summary.get("nr", post_summary.get("id", "?"))
+        subject = html.unescape(post_summary.get("subject", ""))
+
+        # Check subject first (cheap)
+        subject_hits = _extract_deadline_lines(subject)
+
+        # Fetch full post to scan content + answers
+        try:
+            full = network.get_post(nr)
+        except Exception:
+            if subject_hits:
+                results.append(
+                    f"- **@{nr}**: {subject}\n"
+                    + "\n".join(f"  - {h}" for h in subject_hits)
+                )
+            continue
+
+        # Collect all text: question body + answers + follow-ups
+        all_text = subject + "\n"
+        history = full.get("history", [])
+        if history:
+            all_text += html_to_markdown(history[0].get("content", "")) + "\n"
+        for child in full.get("children", []):
+            child_hist = child.get("history", [])
+            if child_hist:
+                all_text += html_to_markdown(
+                    child_hist[0].get("content", "")
+                ) + "\n"
+            all_text += html_to_markdown(child.get("subject", "")) + "\n"
+
+        hits = _extract_deadline_lines(all_text)
+        if hits:
+            # Deduplicate while preserving order
+            seen: set[str] = set()
+            unique: list[str] = []
+            for h in hits:
+                normed = h.lower().strip()
+                if normed not in seen:
+                    seen.add(normed)
+                    unique.append(h)
+            results.append(
+                f"- **@{nr}: {subject}**\n"
+                + "\n".join(f"  - {h}" for h in unique[:5])
+            )
+
+    if not results:
+        folder_msg = f" in folder '{folder}'" if folder else ""
+        return f"No deadline-related posts found{folder_msg}."
+
+    lines = [f"Found deadline info in {len(results)} post(s):", ""]
+    lines.extend(results)
+    return "\n\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Summarize folder chaos
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def summarize_folder_activity(
+    folder: str,
+    hours: int = 24,
+    limit: int = 20,
+) -> str:
+    """Get a bulleted summary of bugs, clarifications, and key info from a
+    folder in the last N hours. Fetches full post content (not just snippets)
+    and extracts the important bits. Use this for questions like 'summarize
+    the chaos on project 2' or 'what do I need to know about a]3 before I
+    start?'. The folder parameter is required."""
+    network = _get_network()
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+
+    feed = network.get_filtered_feed(FolderFilter(folder))["feed"]
+
+    # Filter to recent posts
+    recent: list[dict] = []
+    for p in feed:
+        mod = p.get("modified", "")
+        if not mod:
+            continue
+        try:
+            post_dt = datetime.fromisoformat(mod.replace("Z", "+00:00"))
+            if post_dt >= cutoff:
+                recent.append(p)
+        except ValueError:
+            continue
+
+    recent = recent[:limit]
+
+    if not recent:
+        return f"No posts in folder '{folder}' in the last {hours} hours."
+
+    bullets: list[str] = []
+    for post_summary in recent:
+        nr = post_summary.get("nr", post_summary.get("id", "?"))
+        subject = html.unescape(post_summary.get("subject", "(no subject)"))
+        has_i = post_summary.get("has_i")
+        has_s = post_summary.get("has_s")
+        no_answer = post_summary.get("no_answer")
+
+        # Fetch full post for content
+        try:
+            full = network.get_post(nr)
+        except Exception:
+            bullets.append(f"- **@{nr}: {subject}** (could not fetch details)")
+            continue
+
+        # Get question body
+        history = full.get("history", [])
+        question_body = ""
+        if history:
+            question_body = html_to_markdown(history[0].get("content", ""))
+        question_snippet = make_snippet(question_body, max_length=200)
+
+        # Get answer summaries
+        answer_parts: list[str] = []
+        for child in full.get("children", []):
+            ctype = child.get("type", "")
+            child_hist = child.get("history", [])
+            if ctype == "i_answer" and child_hist:
+                ans = make_snippet(
+                    html_to_markdown(child_hist[0].get("content", "")),
+                    max_length=200,
+                )
+                if ans:
+                    answer_parts.append(f"  - **Instructor:** {ans}")
+            elif ctype == "s_answer" and child_hist:
+                ans = make_snippet(
+                    html_to_markdown(child_hist[0].get("content", "")),
+                    max_length=200,
+                )
+                if ans:
+                    answer_parts.append(f"  - **Student:** {ans}")
+
+        status_tag = ""
+        if has_i:
+            status_tag = " [instructor answered]"
+        elif has_s:
+            status_tag = " [student answered]"
+        elif no_answer:
+            status_tag = " [unanswered]"
+
+        bullet = f"- **@{nr}: {subject}**{status_tag}"
+        if question_snippet:
+            bullet += f"\n  - Q: {question_snippet}"
+        if answer_parts:
+            bullet += "\n" + "\n".join(answer_parts)
+        bullets.append(bullet)
+
+    header = (
+        f"Summary of **{folder}** — {len(bullets)} post(s) "
+        f"in the last {hours}h:\n"
+    )
+    return header + "\n\n".join(bullets)
+
+
+# ---------------------------------------------------------------------------
+# Unread posts I'm following
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def get_my_unread(
+    limit: int = 20,
+) -> str:
+    """Get unread posts that you are following — threads you created, answered,
+    or bookmarked that have new activity. Filters out noise from other people's
+    random questions. Use this for 'any updates on my stuff?' or 'what did I
+    miss on threads I care about?'."""
+    network = _get_network()
+
+    # Get both sets and intersect by post number
+    following = network.get_filtered_feed(FollowingFilter())["feed"]
+    unread = network.get_filtered_feed(UnreadFilter())["feed"]
+
+    unread_nrs = {p.get("nr") for p in unread if p.get("nr")}
+    my_unread = [p for p in following if p.get("nr") in unread_nrs][:limit]
+
+    if not my_unread:
+        return "No unread updates on posts you're following — you're caught up!"
+
+    lines = [f"Found {len(my_unread)} unread post(s) you're following:", ""]
+    for p in my_unread:
+        lines.append(_format_feed_post(p))
+    return "\n\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Write tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def write_post(
+    subject: str,
+    content: str,
+    folder: str,
+    anonymous: bool = True,
+) -> str:
+    """Post a new question to the current class. Posts are anonymous by default.
+    The folder must match one of the folders from set_class (e.g. 'hw1',
+    'project2', 'general'). Content can be plain text or HTML.
+
+    IMPORTANT: Always confirm with the user before posting. Show them the
+    subject, content, and folder, and ask 'should I post this?'."""
+    network = _get_network()
+    result = network.create_post(
+        post_type="question",
+        post_folders=folder,
+        post_subject=subject,
+        post_content=content,
+        anonymous=anonymous,
+    )
+    nr = result.get("nr", "?")
+    return f"Posted question @{nr}: **{subject}** in folder '{folder}'."
+
+
+@mcp.tool()
+def write_reply(
+    post_number: int,
+    content: str,
+    anonymous: bool = True,
+) -> str:
+    """Add a follow-up reply to an existing post. Replies are anonymous by
+    default. Use the post number from search results or a user reference
+    like '@142'.
+
+    IMPORTANT: Always confirm with the user before replying. Show them the
+    post number and content, and ask 'should I post this reply?'."""
+    network = _get_network()
+    # Get the full post to get its cid
+    post = network.get_post(post_number)
+    cid = post.get("id", post_number)
+    network.create_followup(
+        post=cid,
+        content=content,
+        anonymous=anonymous,
+    )
+    return f"Replied to @{post_number} (anonymous={anonymous})."
+
+
+# ---------------------------------------------------------------------------
+# Global search (no set_class needed)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def global_search(
+    query: str,
+    limit_per_class: int = 10,
+) -> str:
+    """Search across ALL active classes at once — no need to call set_class
+    first. Use this for broad questions like 'any updates on my midterms?'
+    or 'anything about extensions?' when you don't know which class to check.
+    Results are grouped by class."""
+    all_nets = _get_all_networks()
+    if not all_nets:
+        return "No active classes found."
+
+    sections: list[str] = []
+    total = 0
+    for class_name, net in all_nets:
+        try:
+            results = net.search_feed(query)[:limit_per_class]
+        except Exception:
+            continue
+        if not results:
+            continue
+        total += len(results)
+        lines = [f"## {class_name}", ""]
+        for post_summary in results:
+            nr = post_summary.get("nr", post_summary.get("id", "?"))
+            subject = html.unescape(
+                post_summary.get("subject", "(no subject)")
+            )
+            snippet = make_snippet(post_summary.get("content_snipet", ""))
+            has_i = post_summary.get("has_i")
+            modified = post_summary.get("modified", "")
+
+            line = f"- **@{nr}: {subject}**"
+            if snippet:
+                line += f" — {snippet}"
+            meta = []
+            if has_i:
+                meta.append("instructor answered")
+            if modified:
+                meta.append(modified)
+            if meta:
+                line += f" ({', '.join(meta)})"
+            lines.append(line)
+        sections.append("\n".join(lines))
+
+    if not sections:
+        return f"No results for '{query}' across any class."
+
+    header = (
+        f"Found {total} result(s) for '{query}' "
+        f"across {len(sections)} class(es):\n"
+    )
+    return header + "\n\n".join(sections)
 
 
 # ---------------------------------------------------------------------------

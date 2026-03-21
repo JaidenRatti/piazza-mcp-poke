@@ -14,6 +14,10 @@ A [Piazza](https://piazza.com) integration for [Poke](https://poke.com) — ask 
 - "What's new since Monday?"
 - "Any updates on posts I'm following?"
 - "What are the pinned posts?"
+- "When is project 2 due?"
+- "Summarize the chaos on a3"
+- "Any updates on midterms across all my classes?"
+- "Post a question about the grading rubric"
 
 ## Tools
 
@@ -37,6 +41,12 @@ A [Piazza](https://piazza.com) integration for [Poke](https://poke.com) — ask 
 | `get_my_posts(limit)` | Posts you're following (created, answered, or bookmarked) |
 | `get_unread_posts(limit)` | Posts with unread updates since you last checked |
 | `get_pinned_posts(limit)` | Pinned posts: due dates, syllabus, office hours, etc. |
+| `get_deadlines(folder, limit)` | Scan posts for due dates, extensions, submission keywords |
+| `summarize_folder_activity(folder, hours)` | Bulleted summary of bugs/clarifications in last N hours |
+| `get_my_unread(limit)` | Unread posts on threads you're following only |
+| `write_post(subject, content, folder)` | Post a new question (anonymous by default) |
+| `write_reply(post_number, content)` | Reply to a thread (anonymous by default) |
+| `global_search(query)` | Search across ALL classes at once — no set_class needed |
 
 ## Quick start
 
