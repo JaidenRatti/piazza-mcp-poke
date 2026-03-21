@@ -16,6 +16,7 @@ dependencies = [
     "piazza-api",
     "html2text",
     "uvicorn",
+    "poke",
 ]
 
 [project.urls]
@@ -29,6 +30,7 @@ dev = [
 
 [project.scripts]
 piazza-mcp-poke = "piazza_mcp.server:main"
+piazza-watcher = "piazza_mcp.watcher:main"
 
 [build-system]
 requires = ["hatchling"]

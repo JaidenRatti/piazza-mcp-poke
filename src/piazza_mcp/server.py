@@ -1,8 +1,10 @@
+import asyncio
 import html
 import os
 import re
 from datetime import datetime, timedelta, timezone
 
+import uvicorn
 from fastmcp import FastMCP
 from piazza_api import Piazza
 from piazza_api.network import (
@@ -11,6 +13,7 @@ from piazza_api.network import (
     Network,
     UnreadFilter,
 )
+from poke.mcp import PokeCallbackMiddleware, with_callbacks
 
 from piazza_mcp.formatting import (
     format_full_post,
@@ -824,6 +827,253 @@ def global_search(
 
 
 # ---------------------------------------------------------------------------
+# Proactive / callback-powered tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+@with_callbacks
+async def daily_digest():
+    """Generate a daily digest of new activity across ALL enrolled classes.
+    Summarizes new posts, instructor announcements, and unanswered questions
+    from the last 24 hours. Designed to be triggered by a Poke Kitchen
+    automation (e.g. daily at 8am) or called manually.
+
+    When triggered via Poke with callback headers, each class summary is
+    streamed back as a separate update so you get incremental results."""
+    _login()
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+    all_nets = _get_all_networks()
+
+    if not all_nets:
+        yield "No active classes found."
+        return
+
+    yield f"Scanning {len(all_nets)} class(es) for activity in the last 24h..."
+
+    for class_name, net in all_nets:
+        try:
+            feed = net.get_feed(limit=100, offset=0)["feed"]
+        except Exception:
+            yield f"**{class_name}**: could not fetch feed."
+            continue
+
+        recent = []
+        for p in feed:
+            mod = p.get("modified", "")
+            if not mod:
+                continue
+            try:
+                post_dt = datetime.fromisoformat(
+                    mod.replace("Z", "+00:00")
+                )
+                if post_dt >= cutoff:
+                    recent.append(p)
+            except ValueError:
+                continue
+
+        if not recent:
+            continue
+
+        instructor_posts = [p for p in recent if p.get("has_i")]
+        unanswered = [p for p in recent if p.get("no_answer")]
+        notes = [p for p in recent if p.get("type") == "note"]
+
+        lines = [f"**{class_name}** — {len(recent)} new post(s):"]
+        if notes:
+            lines.append(
+                f"  \U0001f4e2 {len(notes)} announcement(s): "
+                + ", ".join(
+                    f"@{p.get('nr', '?')}" for p in notes[:5]
+                )
+            )
+        if instructor_posts:
+            lines.append(
+                f"  \U0001f9d1\u200d\U0001f3eb {len(instructor_posts)} "
+                f"instructor reply/replies"
+            )
+        if unanswered:
+            lines.append(
+                f"  \u2753 {len(unanswered)} unanswered question(s)"
+            )
+
+        # Top 3 most-discussed
+        by_followups = sorted(
+            recent,
+            key=lambda x: x.get("num_followups", 0),
+            reverse=True,
+        )[:3]
+        if by_followups:
+            lines.append("  Hot threads:")
+            for p in by_followups:
+                nr = p.get("nr", "?")
+                subj = html.unescape(
+                    p.get("subject", "(no subject)")
+                )
+                nf = p.get("num_followups", 0)
+                lines.append(f"    - @{nr}: {subj} ({nf} follow-ups)")
+
+        yield "\n".join(lines)
+
+    yield "\u2705 Daily digest complete."
+
+
+@mcp.tool()
+@with_callbacks
+async def watch_class(
+    network_id: str,
+    interval_minutes: int = 5,
+    duration_minutes: int = 60,
+):
+    """Watch a class for new instructor posts and announcements, sending
+    real-time updates back to Poke as they appear.
+
+    Polls every `interval_minutes` for up to `duration_minutes`. Each time
+    a new instructor post or announcement is detected, it's sent back as a
+    callback message.
+
+    Call list_classes first to get the network_id. This tool is designed
+    for 'let me know when the prof posts something'."""
+    p = _login()
+    net = p.network(network_id)
+
+    yield (
+        f"Watching for instructor posts every {interval_minutes}m "
+        f"for the next {duration_minutes}m..."
+    )
+
+    seen_nrs: set[int] = set()
+    # Seed with current posts so we only alert on NEW ones
+    try:
+        initial = net.get_feed(limit=50, offset=0)["feed"]
+        for post in initial:
+            nr = post.get("nr")
+            if nr:
+                seen_nrs.add(nr)
+    except Exception:
+        pass
+
+    end_time = datetime.now(tz=timezone.utc) + timedelta(
+        minutes=duration_minutes
+    )
+
+    while datetime.now(tz=timezone.utc) < end_time:
+        await asyncio.sleep(interval_minutes * 60)
+
+        try:
+            feed = net.get_feed(limit=30, offset=0)["feed"]
+        except Exception:
+            continue
+
+        for post in feed:
+            nr = post.get("nr")
+            if not nr or nr in seen_nrs:
+                continue
+            seen_nrs.add(nr)
+
+            has_i = post.get("has_i")
+            is_note = post.get("type") == "note"
+
+            if has_i or is_note:
+                subj = html.unescape(
+                    post.get("subject", "(no subject)")
+                )
+                tag = "\U0001f4e2 Announcement" if is_note else (
+                    "\U0001f9d1\u200d\U0001f3eb Instructor post"
+                )
+                yield f"{tag}: **@{nr}: {subj}**"
+
+    yield "\u23f0 Watch period ended."
+
+
+@mcp.tool()
+@with_callbacks
+async def watch_deadlines(
+    network_id: str,
+    folder: str | None = None,
+    interval_minutes: int = 30,
+    duration_minutes: int = 480,
+):
+    """Monitor for new deadline-related posts (due dates, extensions,
+    submission info) and alert you when they appear.
+
+    Polls every `interval_minutes` for up to `duration_minutes` (default 8h).
+    Great for 'let me know if there are any deadline changes'."""
+    p = _login()
+    net = p.network(network_id)
+
+    yield (
+        f"Monitoring for deadline updates every {interval_minutes}m "
+        f"for {duration_minutes}m..."
+    )
+
+    seen_nrs: set[int] = set()
+    try:
+        initial = net.get_feed(limit=50, offset=0)["feed"]
+        for post in initial:
+            nr = post.get("nr")
+            if nr:
+                seen_nrs.add(nr)
+    except Exception:
+        pass
+
+    end_time = datetime.now(tz=timezone.utc) + timedelta(
+        minutes=duration_minutes
+    )
+
+    while datetime.now(tz=timezone.utc) < end_time:
+        await asyncio.sleep(interval_minutes * 60)
+
+        try:
+            if folder:
+                feed = net.get_filtered_feed(
+                    FolderFilter(folder)
+                )["feed"]
+            else:
+                feed = net.get_feed(limit=50, offset=0)["feed"]
+        except Exception:
+            continue
+
+        for post in feed:
+            nr = post.get("nr")
+            if not nr or nr in seen_nrs:
+                continue
+            seen_nrs.add(nr)
+
+            subj = html.unescape(
+                post.get("subject", "")
+            )
+            # Quick check on subject for deadline keywords
+            if _DEADLINE_KEYWORDS.search(subj):
+                yield (
+                    f"\u23f0 Deadline alert: **@{nr}: {subj}**"
+                )
+                continue
+
+            # Deep check: fetch full post
+            try:
+                full = net.get_post(nr)
+                all_text = subj + "\n"
+                hist = full.get("history", [])
+                if hist:
+                    all_text += html_to_markdown(
+                        hist[0].get("content", "")
+                    )
+                if _DEADLINE_KEYWORDS.search(all_text):
+                    hits = _extract_deadline_lines(all_text)
+                    detail = hits[0] if hits else ""
+                    yield (
+                        f"\u23f0 Deadline alert: "
+                        f"**@{nr}: {subj}**"
+                        + (f"\n  > {detail}" if detail else "")
+                    )
+            except Exception:
+                continue
+
+    yield "\u23f0 Deadline watch ended."
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -838,12 +1088,12 @@ def main():
     if transport == "stdio":
         mcp.run(transport="stdio")
     else:
-        # Streamable HTTP serves a single endpoint at /mcp that handles
-        # both GET (SSE stream) and POST (messages) — required by Poke.
-        # stateless_http=True avoids session tracking that breaks behind tunnels.
-        mcp.run(
-            transport="streamable-http",
-            host="0.0.0.0",
-            port=port,
-            stateless_http=True,
+        # Wrap the FastMCP app with PokeCallbackMiddleware so
+        # @with_callbacks tools can send async updates to Poke.
+        app = PokeCallbackMiddleware(
+            mcp.http_app(
+                transport="streamable-http",
+                stateless_http=True,
+            )
         )
+        uvicorn.run(app, host="0.0.0.0", port=port)

@@ -18,6 +18,8 @@ A [Piazza](https://piazza.com) integration for [Poke](https://poke.com) — ask 
 - "Summarize the chaos on a3"
 - "Any updates on midterms across all my classes?"
 - "Post a question about the grading rubric"
+- "Watch my distributed systems class and text me when the prof posts"
+- *(8am daily)* "Here's what happened across your classes overnight..."
 
 ## Tools
 
@@ -47,6 +49,14 @@ A [Piazza](https://piazza.com) integration for [Poke](https://poke.com) — ask 
 | `write_post(subject, content, folder)` | Post a new question (anonymous by default) |
 | `write_reply(post_number, content)` | Reply to a thread (anonymous by default) |
 | `global_search(query)` | Search across ALL classes at once — no set_class needed |
+
+### Proactive (callback-powered)
+These tools use `@with_callbacks` to send ongoing updates back to Poke after the initial response.
+| Tool | Description |
+| --- | --- |
+| `daily_digest()` | Summarize all classes’ last 24h — great as a Kitchen cron automation |
+| `watch_class(network_id, interval, duration)` | Poll for new instructor posts and text you when they appear |
+| `watch_deadlines(network_id, folder, interval, duration)` | Monitor for new deadline/extension posts and alert you |
 
 ## Quick start
 
@@ -110,6 +120,44 @@ Open Poke and ask away:
 | `PIAZZA_PASSWORD` | *(required)* | Your Piazza password |
 | `PORT` | `8247` | HTTP port for SSE server |
 | `TRANSPORT` | `streamable-http` | `streamable-http` for Poke, `stdio` for Claude/VS Code |
+
+## Proactive notifications
+
+### Option 1: Callback tools (in-conversation)
+
+Ask Poke to watch a class and it’ll text you updates in real-time:
+
+> "Watch my CS 454 class and let me know when the prof posts something"
+
+This uses `@with_callbacks` from the `poke` SDK — the first response comes back immediately, and subsequent updates are POSTed to Poke as they happen.
+
+### Option 2: Kitchen automation (scheduled)
+
+Set up a daily digest in Poke Kitchen (`poke.com/kitchen`):
+1. Create a recipe with the Piazza integration
+2. Add an automation: schedule `daily` at `8:00 AM`
+3. Action: "Run daily_digest and send me the results"
+
+### Option 3: Watcher daemon (standalone)
+
+Run the watcher as a background process that pushes to Poke independently:
+
+```bash
+PIAZZA_EMAIL=you@school.ca PIAZZA_PASSWORD=yourpass \
+POKE_API_KEY=pk_your_key \
+uv run piazza-watcher
+```
+
+This sends:
+- **Daily digest** at 8am (configurable via `DIGEST_HOUR`)
+- **Instant alerts** when a prof posts, an announcement appears, or a deadline-related post is created
+
+| Env var | Default | Description |
+| --- | --- | --- |
+| `POKE_API_KEY` | *(required)* | Get from `poke.com/kitchen/api-keys` |
+| `WATCH_INTERVAL` | `300` | Seconds between polls |
+| `DIGEST_HOUR` | `8` | Hour (0-23) for daily digest |
+| `WATCH_FOLDERS` | *(all)* | Comma-separated folders to monitor |
 
 ## Docker
 
