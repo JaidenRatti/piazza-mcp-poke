@@ -722,13 +722,18 @@ def write_post(
     content: str,
     folder: str,
     anonymous: bool = True,
+    private: bool = False,
 ) -> str:
     """Post a new question to the current class. Posts are anonymous by default.
     The folder must match one of the folders from set_class (e.g. 'hw1',
     'project2', 'general'). Content can be plain text or HTML.
 
+    Set private=True to make the post visible only to instructors (useful for
+    personal questions about grades, extensions, accommodations, etc.).
+
     IMPORTANT: Always confirm with the user before posting. Show them the
-    subject, content, and folder, and ask 'should I post this?'."""
+    subject, content, folder, and whether it's private, and ask 'should I
+    post this?'."""
     network = _get_network()
     result = network.create_post(
         post_type="question",
@@ -736,9 +741,11 @@ def write_post(
         post_subject=subject,
         post_content=content,
         anonymous=anonymous,
+        is_private=private,
     )
     nr = result.get("nr", "?")
-    return f"Posted question @{nr}: **{subject}** in folder '{folder}'."
+    visibility = "private (instructors only)" if private else "public"
+    return f"Posted {visibility} question @{nr}: **{subject}** in folder '{folder}'."
 
 
 @mcp.tool()
