@@ -1,59 +1,114 @@
-# piazza-mcp
+# piazza-mcp-poke
 
-An MCP server that lets AI agents browse your Piazza course forums — search posts, read questions/answers, and discover relevant course content.
+A [Piazza](https://piazza.com) integration for [Poke](https://poke.com) — ask your AI assistant about course forums in natural language.
 
-## Install
+> Forked from [smchase/piazza-mcp](https://github.com/smchase/piazza-mcp). Adds SSE transport, new student-focused tools, and Poke connection helpers.
 
-Requires [uv](https://docs.astral.sh/uv/) (`brew install uv`).
+## What you can ask Poke
 
-### Claude Code
-
-```bash
-claude mcp add --scope user piazza --env PIAZZA_EMAIL=you@school.ca --env PIAZZA_PASSWORD=your-password -- uvx piazza-mcp@latest
-```
-
-### VS Code
-
-Add to `.vscode/mcp.json`:
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "piazza": {
-        "command": "uvx",
-        "args": ["piazza-mcp@latest"],
-        "env": {
-          "PIAZZA_EMAIL": "you@school.ca",
-          "PIAZZA_PASSWORD": "your-password"
-        }
-      }
-    }
-  }
-}
-```
-
-Credentials are your Piazza login email and password.
+- "What's going on with assignment 3 in my distributed systems class?"
+- "What are the most common questions people have about the midterm?"
+- "Any announcements from the prof this week?"
+- "What questions are still unanswered?"
+- "What has the instructor said about the final project?"
 
 ## Tools
 
+### From upstream
 | Tool | Description |
-|------|-------------|
-| `list_classes()` | List active enrolled Piazza classes |
-| `set_class(network_id)` | Select a class, get available folders |
+| --- | --- |
+| `list_classes()` | List your enrolled Piazza classes |
+| `set_class(network_id)` | Select a class, see available folders |
 | `search_posts(query, folder, limit)` | Search by keyword, folder, or both |
-| `get_post(post_number)` | Read full post with answers and follow-ups |
+| `get_post(post_number)` | Read a full post with all answers and follow-ups |
 
-## Development
+### New for Poke
+| Tool | Description |
+| --- | --- |
+| `get_folder_activity(folder, limit)` | Recent posts by last-modified — "what's happening?" |
+| `get_hot_posts(folder, limit)` | Most-discussed posts sorted by follow-up count |
+| `get_unanswered(folder, limit)` | Posts with zero answers from anyone |
+| `get_announcements(folder, limit)` | Instructor notes: deadlines, extensions, logistics |
+| `get_instructor_replies(folder, limit)` | Posts where the instructor has responded |
+
+## Quick start
+
+### Prerequisites
+
+- Python 3.10+
+- [uv](https://docs.astral.sh/uv/) (`brew install uv`)
+- Node.js 18+ (for `npx poke`)
+- A Poke account (`npx poke@latest login`)
+- Your Piazza email and password
+
+### 1. Clone and install
 
 ```bash
-git clone https://github.com/smchase/piazza-mcp
-cd piazza-mcp
-uv sync --group dev
+git clone https://github.com/JaidenRatti/piazza-mcp-poke.git
+cd piazza-mcp-poke
+uv sync
 ```
 
-Use a local clone in your MCP client:
+### 2. Start the server
 
 ```bash
-claude mcp add piazza-dev --env PIAZZA_EMAIL=you@school.ca --env PIAZZA_PASSWORD=your-password -- uv --directory /path/to/piazza-mcp run piazza-mcp
+PIAZZA_EMAIL=you@school.ca PIAZZA_PASSWORD=yourpass uv run piazza-mcp-poke
 ```
+
+The server starts on `http://localhost:8247/sse` by default.
+
+### 3. Connect to Poke
+
+**Option A — Tunnel (local dev)**
+
+In a second terminal:
+
+```bash
+npx poke@latest tunnel http://localhost:8247/sse -n "Piazza"
+```
+
+**Option B — One-liner**
+
+```bash
+PIAZZA_EMAIL=you@school.ca PIAZZA_PASSWORD=yourpass ./poke-setup.sh
+```
+
+**Option C — Direct URL (if deployed)**
+
+Go to **Poke → Settings → Connections → Add Integration → Create**, enter:
+- Name: `Piazza`
+- MCP Server URL: `https://your-host:8247/sse`
+
+### 4. Talk to Poke
+
+Open Poke and ask away:
+
+> "In my distributed systems class, what are students asking about the latest assignment that the prof has answered?"
+
+## Configuration
+
+| Environment variable | Default | Description |
+| --- | --- | --- |
+| `PIAZZA_EMAIL` | *(required)* | Your Piazza login email |
+| `PIAZZA_PASSWORD` | *(required)* | Your Piazza password |
+| `PORT` | `8247` | HTTP port for SSE server |
+| `TRANSPORT` | `sse` | `sse` for Poke, `stdio` for Claude/VS Code |
+
+## Docker
+
+```bash
+docker build -t piazza-mcp-poke .
+docker run -e PIAZZA_EMAIL=you@school.ca -e PIAZZA_PASSWORD=yourpass -p 8247:8247 piazza-mcp-poke
+```
+
+## Still works with Claude / VS Code
+
+Set `TRANSPORT=stdio` to use the original stdio mode:
+
+```bash
+claude mcp add piazza --env PIAZZA_EMAIL=you@school.ca --env PIAZZA_PASSWORD=yourpass --env TRANSPORT=stdio -- uv --directory /path/to/piazza-mcp-poke run piazza-mcp-poke
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

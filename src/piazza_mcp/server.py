@@ -182,7 +182,168 @@ def get_post(post_number: int) -> str:
     return format_full_post(post)
 
 
+# ---------------------------------------------------------------------------
+# New tools for Poke
+# ---------------------------------------------------------------------------
+
+
+def _format_feed_post(post_summary: dict) -> str:
+    """Format a single feed-level post summary into readable text."""
+    nr = post_summary.get("nr", post_summary.get("id", "?"))
+    subject = html.unescape(post_summary.get("subject", "(no subject)"))
+    snippet = make_snippet(post_summary.get("content_snipet", ""))
+    folders_list = ", ".join(post_summary.get("folders", []))
+    modified = post_summary.get("modified", "")
+    has_i = post_summary.get("has_i")
+    has_s = post_summary.get("has_s")
+    no_answer = post_summary.get("no_answer")
+    num_followups = post_summary.get("num_followups", 0)
+
+    line = f"### @{nr}: {subject}"
+    if snippet:
+        line += f"\n{snippet}"
+    meta = []
+    if folders_list:
+        meta.append(f"Folders: {folders_list}")
+    if has_i:
+        meta.append("Instructor answered")
+    if has_s:
+        meta.append("Student answered")
+    if no_answer:
+        meta.append("Unanswered")
+    if num_followups:
+        meta.append(f"{num_followups} follow-up(s)")
+    if modified:
+        meta.append(f"Date: {modified}")
+    if meta:
+        line += "\n" + " | ".join(meta)
+    return line
+
+
+def _get_feed(folder: str | None, limit: int) -> list[dict]:
+    """Fetch feed posts, optionally filtered by folder."""
+    network = _get_network()
+    if folder:
+        return network.get_filtered_feed(FolderFilter(folder))["feed"][:limit]
+    return network.get_feed(limit=limit, offset=0)["feed"][:limit]
+
+
+@mcp.tool()
+def get_folder_activity(
+    folder: str | None = None,
+    limit: int = 20,
+) -> str:
+    """Get the most recently active posts, optionally filtered to a folder.
+    Posts are sorted by last-modified so you see the latest discussion first.
+    Use this for questions like 'what's going on with assignment 3?' or
+    'what are people talking about in my distributed systems class?'."""
+    posts = _get_feed(folder, limit)
+    if not posts:
+        return "No posts found."
+
+    lines = [f"Found {len(posts)} recent post(s):", ""]
+    for p in posts:
+        lines.append(_format_feed_post(p))
+    return "\n\n".join(lines)
+
+
+@mcp.tool()
+def get_hot_posts(
+    folder: str | None = None,
+    limit: int = 10,
+) -> str:
+    """Get the most-discussed posts — sorted by number of follow-ups.
+    These are the posts everyone is asking about. Use this for questions like
+    'what are the common issues with the assignment?' or 'what should I know
+    before I start?'."""
+    # Fetch a larger window so we can rank
+    raw = _get_feed(folder, limit=100)
+    ranked = sorted(raw, key=lambda p: p.get("num_followups", 0), reverse=True)
+    top = ranked[:limit]
+
+    if not top:
+        return "No posts found."
+
+    lines = [f"Top {len(top)} most-discussed post(s):", ""]
+    for p in top:
+        lines.append(_format_feed_post(p))
+    return "\n\n".join(lines)
+
+
+@mcp.tool()
+def get_unanswered(
+    folder: str | None = None,
+    limit: int = 15,
+) -> str:
+    """Get posts with no answers from anyone (instructor or student).
+    Use this for questions like 'what's still unanswered?' or 'are there
+    questions nobody has helped with yet?'."""
+    raw = _get_feed(folder, limit=100)
+    unanswered = [p for p in raw if p.get("no_answer")][:limit]
+
+    if not unanswered:
+        return "No unanswered posts found — everything has a response!"
+
+    lines = [f"Found {len(unanswered)} unanswered post(s):", ""]
+    for p in unanswered:
+        lines.append(_format_feed_post(p))
+    return "\n\n".join(lines)
+
+
+@mcp.tool()
+def get_announcements(
+    folder: str | None = None,
+    limit: int = 10,
+) -> str:
+    """Get instructor notes and announcements (post type 'note'). These
+    typically contain deadlines, clarifications, extensions, and logistics.
+    Use this for questions like 'any announcements?' or 'did the prof post
+    anything about the deadline?'."""
+    raw = _get_feed(folder, limit=100)
+    notes = [p for p in raw if p.get("type") == "note"][:limit]
+
+    if not notes:
+        return "No announcements found."
+
+    lines = [f"Found {len(notes)} announcement(s):", ""]
+    for p in notes:
+        lines.append(_format_feed_post(p))
+    return "\n\n".join(lines)
+
+
+@mcp.tool()
+def get_instructor_replies(
+    folder: str | None = None,
+    limit: int = 15,
+) -> str:
+    """Get recent posts where the instructor has replied. Use this for
+    questions like 'what has the prof said about the assignment?' or
+    'any instructor clarifications I should know about?'."""
+    raw = _get_feed(folder, limit=100)
+    with_instructor = [p for p in raw if p.get("has_i")][:limit]
+
+    if not with_instructor:
+        return "No posts with instructor replies found."
+
+    lines = [f"Found {len(with_instructor)} post(s) with instructor replies:", ""]
+    for p in with_instructor:
+        lines.append(_format_feed_post(p))
+    return "\n\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
 def main():
-    """Entry point for the piazza-mcp command."""
+    """Entry point for the piazza-mcp-poke command."""
     _login()
-    mcp.run()
+
+    transport = os.environ.get("TRANSPORT", "sse").lower()
+    port = int(os.environ.get("PORT", "8247"))
+
+    if transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        mcp.run(transport="sse", host="0.0.0.0", port=port)
