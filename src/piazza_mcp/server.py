@@ -7,7 +7,7 @@ from piazza_api.network import FolderFilter, Network
 
 from piazza_mcp.formatting import format_full_post, make_snippet
 
-mcp = FastMCP("piazza")
+mcp = FastMCP("piazza", stateless_http=True)
 
 # Global state
 _piazza: Piazza | None = None
