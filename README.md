@@ -46,8 +46,10 @@ A [Piazza](https://piazza.com) integration for [Poke](https://poke.com) — ask 
 | `get_deadlines(folder, limit)` | Scan posts for due dates, extensions, submission keywords |
 | `summarize_folder_activity(folder, hours)` | Bulleted summary of bugs/clarifications in last N hours |
 | `get_my_unread(limit)` | Unread posts on threads you're following only |
-| `write_post(subject, content, folder)` | Post a new question (anonymous by default) |
-| `write_reply(post_number, content)` | Reply to a thread (anonymous by default) |
+| `draft_post(subject, content, folder, anonymous, private)` | Preview a post with exact permissions before posting |
+| `confirm_post(draft_id)` | Post after user reviews and approves the draft |
+| `draft_reply(post_number, content, anonymous)` | Preview a reply before posting |
+| `confirm_reply(draft_id)` | Post reply after user confirms |
 | `global_search(query)` | Search across ALL classes at once — no set_class needed |
 
 ### Proactive (callback-powered)

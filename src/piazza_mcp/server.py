@@ -712,64 +712,175 @@ def get_my_unread(
 
 
 # ---------------------------------------------------------------------------
-# Write tools
+# Write tools (two-step: draft → confirm)
 # ---------------------------------------------------------------------------
+
+# Pending drafts keyed by a simple incrementing ID
+_pending_drafts: dict[int, dict] = {}
+_next_draft_id: int = 1
 
 
 @mcp.tool()
-def write_post(
+def draft_post(
     subject: str,
     content: str,
     folder: str,
     anonymous: bool = True,
     private: bool = False,
 ) -> str:
-    """Post a new question to the current class. Posts are anonymous by default.
-    The folder must match one of the folders from set_class (e.g. 'hw1',
-    'project2', 'general'). Content can be plain text or HTML.
+    """Prepare a new question for the current class WITHOUT posting it.
+    Returns a preview with the exact permissions so the user can review.
 
-    Set private=True to make the post visible only to instructors (useful for
-    personal questions about grades, extensions, accommodations, etc.).
+    You MUST call this first, show the preview to the user, and only call
+    confirm_post after they explicitly approve. NEVER call confirm_post
+    without showing the user the preview and getting their approval.
 
-    IMPORTANT: Always confirm with the user before posting. Show them the
-    subject, content, folder, and whether it's private, and ask 'should I
-    post this?'."""
-    network = _get_network()
-    result = network.create_post(
-        post_type="question",
-        post_folders=[folder],
-        post_subject=subject,
-        post_content=content,
-        anonymous=anonymous,
-        is_private=private,
+    Parameters:
+    - folder: must match one of the folders from set_class (e.g. 'hw1')
+    - anonymous: if True, post as 'Anonymous' to other students (default)
+    - private: if True, only visible to instructors (for grades, extensions)
+    """
+    global _next_draft_id
+    draft_id = _next_draft_id
+    _next_draft_id += 1
+
+    visibility = "PRIVATE (instructors only)" if private else "PUBLIC"
+    identity = "ANONYMOUS" if anonymous else "YOUR NAME VISIBLE"
+
+    _pending_drafts[draft_id] = {
+        "subject": subject,
+        "content": content,
+        "folder": folder,
+        "anonymous": anonymous,
+        "private": private,
+    }
+
+    return (
+        f"**Draft #{draft_id} — Review before posting:**\n\n"
+        f"- **Subject:** {subject}\n"
+        f"- **Content:** {content}\n"
+        f"- **Folder:** {folder}\n"
+        f"- **Visibility:** {visibility}\n"
+        f"- **Identity:** {identity}\n\n"
+        f"If this looks correct, ask the user to confirm. "
+        f"Then call confirm_post(draft_id={draft_id}) to post it."
     )
-    nr = result.get("nr", "?")
-    visibility = "private (instructors only)" if private else "public"
-    return f"Posted {visibility} question @{nr}: **{subject}** in folder '{folder}'."
 
 
 @mcp.tool()
-def write_reply(
+def confirm_post(draft_id: int) -> str:
+    """Post a previously drafted question. Only call this AFTER the user
+    has reviewed the draft from draft_post and explicitly confirmed they
+    want to post it with the shown permissions.
+
+    NEVER call this without user confirmation."""
+    if draft_id not in _pending_drafts:
+        return (
+            f"Draft #{draft_id} not found. "
+            f"Call draft_post first to create a draft."
+        )
+
+    draft = _pending_drafts.pop(draft_id)
+    network = _get_network()
+
+    params = {
+        "anonymous": "stud" if draft["anonymous"] else "no",
+        "subject": draft["subject"],
+        "content": draft["content"],
+        "folders": [draft["folder"]],
+        "type": "question",
+        "config": {
+            "bypass_email": 0,
+            "is_announcement": 0,
+        },
+    }
+    if draft["private"]:
+        user_profile = network._rpc.get_user_profile() or {}
+        user_id = user_profile.get("user_id")
+        if user_id:
+            params["config"]["feed_groups"] = (
+                f"instr_{network._nid},{user_id}"
+            )
+
+    result = network._rpc.content_create(params)
+    nr = result.get("nr", "?")
+    visibility = "private (instructors only)" if draft["private"] else "public"
+    identity = "anonymous" if draft["anonymous"] else "with your name"
+    return (
+        f"\u2705 Posted {visibility} question {identity}: "
+        f"@{nr}: **{draft['subject']}** in folder '{draft['folder']}'."
+    )
+
+
+@mcp.tool()
+def draft_reply(
     post_number: int,
     content: str,
     anonymous: bool = True,
 ) -> str:
-    """Add a follow-up reply to an existing post. Replies are anonymous by
-    default. Use the post number from search results or a user reference
-    like '@142'.
+    """Prepare a follow-up reply to an existing post WITHOUT posting it.
+    Returns a preview so the user can review the content and permissions.
 
-    IMPORTANT: Always confirm with the user before replying. Show them the
-    post number and content, and ask 'should I post this reply?'."""
-    network = _get_network()
-    # Get the full post to get its cid
-    post = network.get_post(post_number)
-    cid = post.get("id", post_number)
-    network.create_followup(
-        post=cid,
-        content=content,
-        anonymous=anonymous,
+    You MUST call this first, show the preview to the user, and only call
+    confirm_reply after they explicitly approve."""
+    global _next_draft_id
+    draft_id = _next_draft_id
+    _next_draft_id += 1
+
+    identity = "ANONYMOUS" if anonymous else "YOUR NAME VISIBLE"
+
+    _pending_drafts[draft_id] = {
+        "_type": "reply",
+        "post_number": post_number,
+        "content": content,
+        "anonymous": anonymous,
+    }
+
+    return (
+        f"**Draft reply #{draft_id} — Review before posting:**\n\n"
+        f"- **Replying to:** @{post_number}\n"
+        f"- **Content:** {content}\n"
+        f"- **Identity:** {identity}\n\n"
+        f"If this looks correct, ask the user to confirm. "
+        f"Then call confirm_reply(draft_id={draft_id}) to post it."
     )
-    return f"Replied to @{post_number} (anonymous={anonymous})."
+
+
+@mcp.tool()
+def confirm_reply(draft_id: int) -> str:
+    """Post a previously drafted reply. Only call this AFTER the user
+    has reviewed the draft from draft_reply and explicitly confirmed.
+
+    NEVER call this without user confirmation."""
+    if draft_id not in _pending_drafts:
+        return (
+            f"Draft #{draft_id} not found. "
+            f"Call draft_reply first to create a draft."
+        )
+
+    draft = _pending_drafts.pop(draft_id)
+    if draft.get("_type") != "reply":
+        return f"Draft #{draft_id} is not a reply draft."
+
+    network = _get_network()
+    post = network.get_post(draft["post_number"])
+    cid = post.get("id", draft["post_number"])
+
+    # Use raw RPC with "stud" for proper anonymous handling
+    params = {
+        "cid": cid,
+        "type": "followup",
+        "subject": draft["content"],
+        "content": "",
+        "config": {"editor": "rte"},
+        "anonymous": "stud" if draft["anonymous"] else "no",
+    }
+    network._rpc.content_create(params)
+
+    identity = "anonymously" if draft["anonymous"] else "with your name"
+    return (
+        f"\u2705 Replied to @{draft['post_number']} {identity}."
+    )
 
 
 # ---------------------------------------------------------------------------
