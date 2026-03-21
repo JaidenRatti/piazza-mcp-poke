@@ -732,7 +732,7 @@ def write_post(
     network = _get_network()
     result = network.create_post(
         post_type="question",
-        post_folders=folder,
+        post_folders=[folder],
         post_subject=subject,
         post_content=content,
         anonymous=anonymous,
