@@ -55,7 +55,7 @@ uv sync
 PIAZZA_EMAIL=you@school.ca PIAZZA_PASSWORD=yourpass uv run piazza-mcp-poke
 ```
 
-The server starts on `http://localhost:8247/sse` by default.
+The server starts on `http://localhost:8247/mcp` by default.
 
 ### 3. Connect to Poke
 
@@ -64,7 +64,7 @@ The server starts on `http://localhost:8247/sse` by default.
 In a second terminal:
 
 ```bash
-npx poke@latest tunnel http://localhost:8247/sse -n "Piazza"
+npx poke@latest tunnel http://localhost:8247/mcp -n "Piazza"
 ```
 
 **Option B — One-liner**
@@ -77,7 +77,7 @@ PIAZZA_EMAIL=you@school.ca PIAZZA_PASSWORD=yourpass ./poke-setup.sh
 
 Go to **Poke → Settings → Connections → Add Integration → Create**, enter:
 - Name: `Piazza`
-- MCP Server URL: `https://your-host:8247/sse`
+- MCP Server URL: `https://your-host:8247/mcp`
 
 ### 4. Talk to Poke
 

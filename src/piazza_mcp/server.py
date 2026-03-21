@@ -340,10 +340,12 @@ def main():
     """Entry point for the piazza-mcp-poke command."""
     _login()
 
-    transport = os.environ.get("TRANSPORT", "sse").lower()
+    transport = os.environ.get("TRANSPORT", "streamable-http").lower()
     port = int(os.environ.get("PORT", "8247"))
 
     if transport == "stdio":
         mcp.run(transport="stdio")
     else:
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+        # Streamable HTTP serves a single endpoint at /mcp that handles
+        # both GET (SSE stream) and POST (messages) — required by Poke.
+        mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
