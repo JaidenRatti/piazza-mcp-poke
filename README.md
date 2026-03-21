@@ -11,6 +11,9 @@ A [Piazza](https://piazza.com) integration for [Poke](https://poke.com) — ask 
 - "Any announcements from the prof this week?"
 - "What questions are still unanswered?"
 - "What has the instructor said about the final project?"
+- "What's new since Monday?"
+- "Any updates on posts I'm following?"
+- "What are the pinned posts?"
 
 ## Tools
 
@@ -30,6 +33,10 @@ A [Piazza](https://piazza.com) integration for [Poke](https://poke.com) — ask 
 | `get_unanswered(folder, limit)` | Posts with zero answers from anyone |
 | `get_announcements(folder, limit)` | Instructor notes: deadlines, extensions, logistics |
 | `get_instructor_replies(folder, limit)` | Posts where the instructor has responded |
+| `get_recent_posts(since, folder, limit)` | Posts updated since a date — "what's new since Monday?" |
+| `get_my_posts(limit)` | Posts you're following (created, answered, or bookmarked) |
+| `get_unread_posts(limit)` | Posts with unread updates since you last checked |
+| `get_pinned_posts(limit)` | Pinned posts: due dates, syllabus, office hours, etc. |
 
 ## Quick start
 
@@ -92,7 +99,7 @@ Open Poke and ask away:
 | `PIAZZA_EMAIL` | *(required)* | Your Piazza login email |
 | `PIAZZA_PASSWORD` | *(required)* | Your Piazza password |
 | `PORT` | `8247` | HTTP port for SSE server |
-| `TRANSPORT` | `sse` | `sse` for Poke, `stdio` for Claude/VS Code |
+| `TRANSPORT` | `streamable-http` | `streamable-http` for Poke, `stdio` for Claude/VS Code |
 
 ## Docker
 

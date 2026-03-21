@@ -1,13 +1,19 @@
 import html
 import os
+from datetime import datetime, timezone
 
 from fastmcp import FastMCP
 from piazza_api import Piazza
-from piazza_api.network import FolderFilter, Network
+from piazza_api.network import (
+    FolderFilter,
+    FollowingFilter,
+    Network,
+    UnreadFilter,
+)
 
 from piazza_mcp.formatting import format_full_post, make_snippet
 
-mcp = FastMCP("piazza", stateless_http=True)
+mcp = FastMCP("piazza")
 
 # Global state
 _piazza: Piazza | None = None
@@ -331,6 +337,111 @@ def get_instructor_replies(
     return "\n\n".join(lines)
 
 
+@mcp.tool()
+def get_recent_posts(
+    since: str,
+    folder: str | None = None,
+    limit: int = 30,
+) -> str:
+    """Get posts created or updated since a given date. Use this to efficiently
+    check for new activity without browsing everything. The `since` parameter
+    accepts dates like '2025-03-01', '2025-03-15T10:00:00', 'yesterday', or
+    relative expressions the user might say — but you should convert them to
+    ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS) before calling."""
+    try:
+        if "T" in since:
+            cutoff = datetime.fromisoformat(since)
+        else:
+            cutoff = datetime.strptime(since, "%Y-%m-%d")
+    except ValueError:
+        return f"Could not parse date '{since}'. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS."
+
+    # Make cutoff timezone-aware (UTC) if naive
+    if cutoff.tzinfo is None:
+        cutoff = cutoff.replace(tzinfo=timezone.utc)
+
+    raw = _get_feed(folder, limit=200)
+    recent = []
+    for p in raw:
+        mod = p.get("modified", "")
+        if not mod:
+            continue
+        try:
+            post_dt = datetime.fromisoformat(mod.replace("Z", "+00:00"))
+            if post_dt >= cutoff:
+                recent.append(p)
+        except ValueError:
+            continue
+
+    recent = recent[:limit]
+
+    if not recent:
+        return f"No posts found since {since}."
+
+    lines = [f"Found {len(recent)} post(s) since {since}:", ""]
+    for p in recent:
+        lines.append(_format_feed_post(p))
+    return "\n\n".join(lines)
+
+
+@mcp.tool()
+def get_my_posts(
+    limit: int = 20,
+) -> str:
+    """Get posts you are following — these are posts you created, answered,
+    or explicitly followed. Use this for questions like 'what posts am I
+    tracking?', 'any updates on my questions?', or 'show me stuff I care
+    about'."""
+    network = _get_network()
+    feed = network.get_filtered_feed(FollowingFilter())["feed"][:limit]
+
+    if not feed:
+        return "You're not following any posts."
+
+    lines = [f"Found {len(feed)} post(s) you're following:", ""]
+    for p in feed:
+        lines.append(_format_feed_post(p))
+    return "\n\n".join(lines)
+
+
+@mcp.tool()
+def get_unread_posts(
+    limit: int = 20,
+) -> str:
+    """Get posts with unread updates. Use this for questions like 'what's new
+    since I last checked?' or 'any unread posts?'."""
+    network = _get_network()
+    feed = network.get_filtered_feed(UnreadFilter())["feed"][:limit]
+
+    if not feed:
+        return "No unread posts — you're all caught up!"
+
+    lines = [f"Found {len(feed)} unread post(s):", ""]
+    for p in feed:
+        lines.append(_format_feed_post(p))
+    return "\n\n".join(lines)
+
+
+@mcp.tool()
+def get_pinned_posts(
+    limit: int = 10,
+) -> str:
+    """Get pinned posts for the current class. Pinned posts usually contain
+    important info like due dates, syllabus, office hours, exam logistics, or
+    grading policies. Use this for questions like 'what are the pinned posts?',
+    'when is the assignment due?', or 'what are the important posts?'."""
+    raw = _get_feed(folder=None, limit=200)
+    pinned = [p for p in raw if p.get("pin")][:limit]
+
+    if not pinned:
+        return "No pinned posts found."
+
+    lines = [f"Found {len(pinned)} pinned post(s):", ""]
+    for p in pinned:
+        lines.append(_format_feed_post(p))
+    return "\n\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -348,4 +459,10 @@ def main():
     else:
         # Streamable HTTP serves a single endpoint at /mcp that handles
         # both GET (SSE stream) and POST (messages) — required by Poke.
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
+        # stateless_http=True avoids session tracking that breaks behind tunnels.
+        mcp.run(
+            transport="streamable-http",
+            host="0.0.0.0",
+            port=port,
+            stateless_http=True,
+        )
