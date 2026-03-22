@@ -9,7 +9,7 @@ COPY src/ src/
 
 RUN uv pip install --system .
 
-ENV TRANSPORT=sse
+ENV TRANSPORT=streamable-http
 ENV PORT=8247
 
 EXPOSE 8247

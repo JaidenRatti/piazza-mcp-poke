@@ -1,0 +1,15 @@
+services:
+- type: web
+  name: piazza-mcp-poke
+  runtime: docker
+  plan: free
+  autoDeploy: true
+  envVars:
+  - key: PIAZZA_EMAIL
+    sync: false
+  - key: PIAZZA_PASSWORD
+    sync: false
+  - key: TRANSPORT
+    value: streamable-http
+  - key: PORT
+    value: "8247"
