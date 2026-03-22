@@ -100,11 +100,22 @@ npx poke@latest tunnel http://localhost:8247/mcp -n "Piazza"
 PIAZZA_EMAIL=you@school.ca PIAZZA_PASSWORD=yourpass ./poke-setup.sh
 ```
 
-**Option C — Direct URL (if deployed)**
+**Option C — Deploy to Render (always-on, no terminal needed)**
 
-Go to **Poke → Settings → Connections → Add Integration → Create**, enter:
-- Name: `Piazza`
-- MCP Server URL: `https://your-host:8247/mcp`
+1. Fork this repo on GitHub
+2. Go to [render.com](https://render.com) → **New** → **Web Service** → connect your fork
+3. Render auto-detects the `render.yaml` and Dockerfile
+4. Add your credentials as environment variables in the Render dashboard:
+   - `PIAZZA_EMAIL` = your Piazza login email
+   - `PIAZZA_PASSWORD` = your Piazza password
+5. Deploy — your server will be at `https://your-service-name.onrender.com/mcp`
+6. Add the integration to your Poke account:
+
+```bash
+npx poke@latest mcp add https://your-service-name.onrender.com/mcp -n "Piazza"
+```
+
+> **Note:** Render's free tier spins down after inactivity. The first request after idle takes ~50s. Upgrade to Starter if this is an issue.
 
 ### 4. Talk to Poke
 
@@ -118,7 +129,7 @@ Open Poke and ask away:
 | --- | --- | --- |
 | `PIAZZA_EMAIL` | *(required)* | Your Piazza login email |
 | `PIAZZA_PASSWORD` | *(required)* | Your Piazza password |
-| `PORT` | `8247` | HTTP port for SSE server |
+| `PORT` | `8247` | HTTP port for the server |
 | `TRANSPORT` | `streamable-http` | `streamable-http` for Poke, `stdio` for Claude/VS Code |
 
 ## Proactive notifications
