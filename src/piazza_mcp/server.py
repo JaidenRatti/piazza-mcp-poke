@@ -1179,7 +1179,6 @@ def main():
         app = PokeCallbackMiddleware(
             mcp.http_app(
                 transport="streamable-http",
-                stateless_http=True,
             )
         )
         uvicorn.run(app, host="0.0.0.0", port=port)
