@@ -268,17 +268,61 @@ def _get_feed(folder: str | None, limit: int) -> list[dict]:
 @mcp.tool()
 def get_folder_activity(
     folder: str | None = None,
+    since: str | None = None,
     limit: int = 20,
 ) -> str:
-    """Get the most recently active posts, optionally filtered to a folder.
-    Posts are sorted by last-modified so you see the latest discussion first.
-    Use this for questions like 'what's going on with assignment 3?' or
-    'what are people talking about in my distributed systems class?'."""
-    posts = _get_feed(folder, limit)
-    if not posts:
-        return "No posts found."
+    """Get the most recently active posts, optionally filtered to a folder
+    and/or a date cutoff. Posts are sorted by last-modified so you see the
+    latest discussion first.
 
-    lines = [f"Found {len(posts)} recent post(s):", ""]
+    Use this for questions like 'what's going on with assignment 3?',
+    'what are people talking about in my distributed systems class?', or
+    'what's new since Monday?'.
+
+    The optional `since` parameter filters to posts updated after a date.
+    Convert relative dates to ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+    before calling."""
+    cutoff = None
+    if since:
+        try:
+            if "T" in since:
+                cutoff = datetime.fromisoformat(since)
+            else:
+                cutoff = datetime.strptime(since, "%Y-%m-%d")
+        except ValueError:
+            return (
+                f"Could not parse date '{since}'. "
+                f"Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS."
+            )
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+
+    raw = _get_feed(folder, limit=200 if cutoff else limit)
+
+    if cutoff:
+        posts = []
+        for p in raw:
+            mod = p.get("modified", "")
+            if not mod:
+                continue
+            try:
+                post_dt = datetime.fromisoformat(
+                    mod.replace("Z", "+00:00")
+                )
+                if post_dt >= cutoff:
+                    posts.append(p)
+            except ValueError:
+                continue
+        posts = posts[:limit]
+    else:
+        posts = raw
+
+    if not posts:
+        since_msg = f" since {since}" if since else ""
+        return f"No posts found{since_msg}."
+
+    since_msg = f" since {since}" if since else ""
+    lines = [f"Found {len(posts)} recent post(s){since_msg}:", ""]
     for p in posts:
         lines.append(_format_feed_post(p))
     return "\n\n".join(lines)
@@ -369,50 +413,47 @@ def get_instructor_replies(
 
 
 @mcp.tool()
-def get_recent_posts(
-    since: str,
-    folder: str | None = None,
-    limit: int = 30,
-) -> str:
-    """Get posts created or updated since a given date. Use this to efficiently
-    check for new activity without browsing everything. The `since` parameter
-    accepts dates like '2025-03-01', '2025-03-15T10:00:00', 'yesterday', or
-    relative expressions the user might say — but you should convert them to
-    ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS) before calling."""
-    try:
-        if "T" in since:
-            cutoff = datetime.fromisoformat(since)
-        else:
-            cutoff = datetime.strptime(since, "%Y-%m-%d")
-    except ValueError:
-        return f"Could not parse date '{since}'. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS."
+def get_class_stats() -> str:
+    """Get statistics and overview for the current class — total posts,
+    response rates, active users, etc. Use this for questions like
+    'how active is my class?' or 'what are the class stats?'."""
+    network = _get_network()
+    stats = network.get_statistics()
 
-    # Make cutoff timezone-aware (UTC) if naive
-    if cutoff.tzinfo is None:
-        cutoff = cutoff.replace(tzinfo=timezone.utc)
+    # Also compute quick summary from recent feed
+    feed = network.get_feed(limit=100, offset=0)["feed"]
+    total_in_feed = len(feed)
+    with_instructor = sum(1 for p in feed if p.get("has_i"))
+    unanswered = sum(1 for p in feed if p.get("no_answer"))
+    notes = sum(1 for p in feed if p.get("type") == "note")
 
-    raw = _get_feed(folder, limit=200)
-    recent = []
-    for p in raw:
-        mod = p.get("modified", "")
-        if not mod:
-            continue
-        try:
-            post_dt = datetime.fromisoformat(mod.replace("Z", "+00:00"))
-            if post_dt >= cutoff:
-                recent.append(p)
-        except ValueError:
-            continue
+    lines = ["**Class Overview** (last 100 posts):"]
+    lines.append(f"- Total posts in feed: {total_in_feed}")
+    lines.append(f"- With instructor answer: {with_instructor}")
+    lines.append(f"- Unanswered: {unanswered}")
+    lines.append(f"- Announcements/notes: {notes}")
+    if total_in_feed > 0:
+        response_rate = (
+            (total_in_feed - unanswered) / total_in_feed * 100
+        )
+        lines.append(f"- Response rate: {response_rate:.0f}%")
 
-    recent = recent[:limit]
+    # Include Piazza's own stats if available
+    if isinstance(stats, dict):
+        total = stats.get("total", {})
+        if total.get("questions"):
+            lines.append("\n**All-time stats:**")
+            lines.append(
+                f"- Total questions: {total.get('questions', '?')}"
+            )
+            lines.append(
+                f"- Total posts: {total.get('posts', '?')}"
+            )
+            days = stats.get("days_since_launch")
+            if days:
+                lines.append(f"- Days since launch: {days}")
 
-    if not recent:
-        return f"No posts found since {since}."
-
-    lines = [f"Found {len(recent)} post(s) since {since}:", ""]
-    for p in recent:
-        lines.append(_format_feed_post(p))
-    return "\n\n".join(lines)
+    return "\n".join(lines)
 
 
 @mcp.tool()

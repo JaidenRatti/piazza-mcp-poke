@@ -34,12 +34,12 @@ A [Piazza](https://piazza.com) integration for [Poke](https://poke.com) — ask 
 ### New for Poke
 | Tool | Description |
 | --- | --- |
-| `get_folder_activity(folder, limit)` | Recent posts by last-modified — "what's happening?" |
+| `get_folder_activity(folder, since, limit)` | Recent posts, optionally since a date — "what's new since Monday?" |
 | `get_hot_posts(folder, limit)` | Most-discussed posts sorted by follow-up count |
 | `get_unanswered(folder, limit)` | Posts with zero answers from anyone |
 | `get_announcements(folder, limit)` | Instructor notes: deadlines, extensions, logistics |
 | `get_instructor_replies(folder, limit)` | Posts where the instructor has responded |
-| `get_recent_posts(since, folder, limit)` | Posts updated since a date — "what's new since Monday?" |
+| `get_class_stats()` | Class overview: total posts, response rate, unanswered count |
 | `get_my_posts(limit)` | Posts you're following (created, answered, or bookmarked) |
 | `get_unread_posts(limit)` | Posts with unread updates since you last checked |
 | `get_pinned_posts(limit)` | Pinned posts: due dates, syllabus, office hours, etc. |
